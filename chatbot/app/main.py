@@ -20,6 +20,10 @@ try:  # gap board (Contract 3). The panel works without it.
     from chatbot.core.gaps import record as gaps_record, top as gaps_top  # noqa: E402
 except Exception:
     gaps_record = gaps_top = None
+try:  # how many top results the board counts per question (gaps.TOP)
+    from chatbot.core.gaps import TOP as GAPS_COUNTED  # noqa: E402
+except Exception:
+    GAPS_COUNTED = 3
 
 st.set_page_config(page_title="Ask the Atlas", page_icon="🧭", layout="centered")
 
@@ -273,9 +277,11 @@ def ask_view():
                 gaps_record(before)
             except Exception:
                 pass
-        # Remember what this question hit, so the board can mark "from your question".
-        st.session_state.last_hit = {"doubts": set(), "needs": set()} if is_chat else {
-            "doubts": {(r.get("id"), d) for r in before.get("results", []) for d in r.get("doubts", [])},
+        # Remember what this question hit, so the board can mark "from your question". Same rules as
+        # gaps.record(): only the top results count, and a dead end with nothing nameable isn't recorded.
+        unrecorded = is_chat or (before.get("dead_end") and not before.get("lacking"))
+        st.session_state.last_hit = {"doubts": set(), "needs": set()} if unrecorded else {
+            "doubts": {(r.get("id"), d) for r in before.get("results", [])[:GAPS_COUNTED] for d in r.get("doubts", [])},
             "needs": set(before.get("lacking") or []) if before.get("dead_end") else set(),
         }
 

@@ -24,7 +24,10 @@ top(n: int = 10) -> list[dict] # today's gaps, most-hit first
 Per question, only: the date (`YYYY-MM-DD`), `needs`, `lacking`, `dead_end`, and for each result its `id`
 plus the gap doubts it showed (`approximate pin`, `no stage listed`, `no connections`,
 `no check size listed`, `deadline passed …`; "last verified" and open deadlines describe an entry, so they aren't gaps).
-Labels outside the Atlas vocabulary are dropped. `kind: "chat"` answers are never recorded. **Never the raw query text**, and nothing about the person asking
+Labels outside the Atlas vocabulary are dropped. `kind: "chat"` answers are never recorded.
+Only gaps a maintainer could fix are kept: only the **first 3 results** count (`gaps.TOP`), since those
+are the ones a person reads, and a dead end with no `lacking` label in the vocabulary (a person, a place
+outside Massachusetts, gibberish) records nothing. **Never the raw query text**, and nothing about the person asking
 (no IP, session id or timestamp finer than the day).
 
 Stored at `GAPS_PATH` (default `chatbot/data/gaps.jsonl`). The file is gitignored, so it's never committed.
