@@ -322,9 +322,8 @@ STATUS = {  # status -> (badge class, label)
 
 
 def gaps_view():
-    st.markdown("**What people couldn't find.** Each question asked here records the gaps it hit: dead ends, "
-                "and doubt signals on the results. Some gaps already have a repair: a reviewed link that our "
-                "survey found independently of this board.")
+    st.markdown("Each question asked here records the gaps it hit: dead ends, and doubt signals on results. "
+                "Some already have a repair: a reviewed link our survey found independently of this board.")
     st.caption("We store only the parsed needs and the Atlas ids, never the question text or anything about who asked. "
                "Counts include questions our team asked while testing today.")
     if not gaps_top:
@@ -339,10 +338,10 @@ def gaps_view():
         return
     items = everything[:10]  # the list shows the top 10; the totals count every gap today
     counts = {s: sum(1 for it in everything if it.get("status") == s) for s in STATUS}
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Open", counts["open"])
-    c2.metric("Needs review", counts["queued"])
-    c3.metric("Repaired", counts["repaired"])
+    st.markdown(f'<div class="badges" aria-label="Totals for today">'
+                f'<span class="badge b-warn">{counts["open"]} open</span>'
+                f'<span class="badge b-info">{counts["queued"]} needs review</span>'
+                f'<span class="badge b-ok">{counts["repaired"]} repaired</span></div>', unsafe_allow_html=True)
     hit = st.session_state.get("last_hit") or {"doubts": set(), "needs": set()}
     for it in items:
         mine = ((it.get("id"), it.get("doubt")) in hit["doubts"]) if it.get("kind") == "doubt" \
