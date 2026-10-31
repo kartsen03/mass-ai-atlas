@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 import streamlit as st  # noqa: E402
+import streamlit.components.v1 as components  # noqa: E402
 
 from chatbot.core.answer import answer  # noqa: E402  (also loads .env)
 
@@ -40,6 +41,10 @@ CSS = """
 .conn.pending{border-left-color:rgba(245,158,11,.8);background:rgba(245,158,11,.06)}
 .conn q{font-style:italic}
 .small{font-size:.85rem;opacity:.85}
+.acts{display:flex;flex-wrap:wrap;gap:.5rem;margin:.5rem 0 .1rem}
+.act{display:inline-block;padding:.35rem .8rem;border-radius:8px;border:1px solid rgba(127,127,127,.45);
+  text-decoration:none!important;font-size:.9rem}
+button[kind^="primary"]{color:#111827!important}
 a:focus-visible,button:focus-visible{outline:3px solid #3b82f6;outline-offset:2px}
 </style>
 """
@@ -64,6 +69,11 @@ def env_path(var: str, default: str) -> Path:
 NAMES = atlas_names(str(env_path("ATLAS_PATH", "chatbot/data/atlas.json")))
 LINKS_FILE = env_path("LINKS_PATH", "contracts/sample-proposed-links.json")
 
+# Set by demo.html when the panel floats over the local Atlas site. Local hosts only.
+SITE = st.query_params.get("site")
+if not (isinstance(SITE, str) and re.match(r"^http://(localhost|127\.0\.0\.1)(:\d+)?/", SITE)):
+    SITE = None
+
 
 @st.cache_data(show_spinner=False)
 def ask(query: str, mode: str) -> dict:
@@ -73,7 +83,13 @@ def ask(query: str, mode: str) -> dict:
 # ---------- rendering helpers ----------
 
 def e(s) -> str:
-    return html.escape(str(s or ""))
+    # Escape HTML, and "$" so Streamlit doesn't render "$10K–$100K" as LaTeX math.
+    return html.escape(str(s or "")).replace("$", "&#36;")
+
+
+def md_text(s) -> str:
+    """For plain st.info / st.warning text: keep dollar signs literal."""
+    return str(s or "").replace("$", "\\$")
 
 
 def safe_url(u) -> str | None:
@@ -151,6 +167,13 @@ def connection_html(c: dict) -> str:
     return ""  # rejected or unknown: never shown
 
 
+def show_on_map(entry_id: str):
+    """Ask demo.html (the page hosting this panel) to open the entry on the Atlas map behind us."""
+    origin = re.match(r"^https?://[^/]+", SITE)[0]
+    msg = json.dumps({"type": "atlas-open", "id": entry_id})
+    components.html(f"<script>window.top.postMessage({msg}, {json.dumps(origin)});</script>", height=0)
+
+
 def render_result(rank: int, r: dict, before: dict | None, trust: dict | None):
     resolved = [d for d in (before or {}).get("doubts", []) if d not in r.get("doubts", [])]
     with st.container(border=True):
@@ -167,16 +190,28 @@ def render_result(rank: int, r: dict, before: dict | None, trust: dict | None):
         conns = [c for c in r.get("connections", []) if c.get("status") in ("atlas", "approved", "pending")]
         if conns:
             st.markdown("".join(connection_html(c) for c in conns), unsafe_allow_html=True)
-        if safe_url(r.get("atlas_url")):
-            st.link_button("Open the Atlas entry →", r["atlas_url"])
+        entry_link = (f'<a class="act" href="{e(r["atlas_url"])}" target="_blank" rel="noopener">'
+                      f'Open the Atlas entry ↗</a>') if safe_url(r.get("atlas_url")) else ""
+        if SITE and r.get("id") in NAMES:
+            c1, c2 = st.columns(2)
+            if c1.button("📍 Show on the map", key=f"map-{rank}-{r['id']}", type="primary", use_container_width=True):
+                show_on_map(r["id"])
+            c2.markdown(f'<div class="acts">{entry_link}</div>', unsafe_allow_html=True)
+        elif entry_link:
+            st.markdown(f'<div class="acts">{entry_link}</div>', unsafe_allow_html=True)
 
 
 # ---------- page ----------
 
 st.markdown(CSS, unsafe_allow_html=True)
-st.title("Ask the Atlas")
-st.caption("A shortlist of Massachusetts AI organizations, taken only from the Mass AI Atlas. "
-           "Every result links to its source and shows what we're unsure about.")
+if SITE:  # embedded: demo.html already shows the title bar, so tighten the page
+    st.markdown("<style>.block-container{padding:.9rem 1rem 2rem!important}"
+                "h4{font-size:1.05rem!important;padding:.1rem 0!important}</style>", unsafe_allow_html=True)
+    st.caption("A ranked shortlist from the Atlas. Every result has a source, and we show what we're unsure about.")
+else:
+    st.title("Ask the Atlas")
+    st.caption("A shortlist of Massachusetts AI organizations, taken only from the Mass AI Atlas. "
+               "Every result links to its source and shows what we're unsure about.")
 
 if "query" not in st.session_state:
     st.session_state.query = ""
@@ -187,20 +222,20 @@ with st.form("ask", clear_on_submit=False, border=False):
     if st.form_submit_button("Ask", type="primary"):
         st.session_state.query = q.strip()
 
-st.markdown('<span class="small">Try:</span>', unsafe_allow_html=True)
-cols = st.columns(2)
-for i, ex in enumerate(EXAMPLES):
-    if cols[i % 2].button(ex, key=f"ex{i}", use_container_width=True):
-        st.session_state.query = ex
-        st.rerun()
+if not st.session_state.query:  # examples only until the first question, to keep the panel short
+    st.markdown('<span class="small">Try one:</span>', unsafe_allow_html=True)
+    for i, ex in enumerate(EXAMPLES):
+        if st.button(ex, key=f"ex{i}", use_container_width=True):
+            st.session_state.query = ex
+            st.rerun()
 
 mode_label = st.radio(
     "Connections",
-    ["Atlas only (before)", "Atlas + reviewed links (after)"],
+    ["Before: Atlas only", "After: + reviewed links"],
     index=1, horizontal=True,
     help="'After' adds links a person on our team reviewed and approved, each with its source sentence.",
 )
-mode = "after" if mode_label.endswith("(after)") else "before"
+mode = "after" if mode_label.startswith("After") else "before"
 
 query = st.session_state.query
 if query:
@@ -215,7 +250,7 @@ if query:
 
     results = res.get("results", [])
     if res.get("not_found"):
-        (st.warning if not results else st.info)(res["not_found"])
+        (st.warning if not results else st.info)(md_text(res["not_found"]))
 
     trust = res.get("trust")
     top_ids = [r.get("id") for r in results[:2]]
