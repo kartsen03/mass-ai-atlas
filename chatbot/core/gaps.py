@@ -15,6 +15,7 @@ from chatbot.core.answer import CAT_NOUN, GAP_PLACES, OFFER_LABEL, PLACES, STAGE
 # "apply by" are on most entries and describe them, so they aren't gaps.
 GAP_DOUBTS = ("approximate pin", "no stage listed", "no connections", "no check size listed")
 _STATUS_ORDER = {"open": 0, "queued": 1, "repaired": 2}
+TOP = 3
 
 
 def _file():
@@ -33,17 +34,24 @@ def _gap_doubt(x):
 
 
 def record(ans):
-    """Append one question's gaps. Call once per submitted question, with the "before" answer."""
+    """Append one question's gaps. Call once per submitted question, with the "before" answer.
+
+    Only gaps a maintainer could fix are kept. A question the Atlas vocabulary can't express
+    ("startups on Mars", a person, a place outside Massachusetts, gibberish) leaves nothing, and
+    only the first TOP results count, since those are the ones a person reads."""
     try:
         if not isinstance(ans, dict) or ans.get("kind") == "chat":
             return
         by_id, allowed = atlas()["by_id"], _labels()
+        lacking = [n for n in ans.get("lacking") or [] if n in allowed][:6]
+        if ans.get("dead_end") and not lacking:
+            return
         row = {"date": date.today().isoformat(),
                "needs": [n for n in ans.get("needs") or [] if n in allowed][:6],
-               "lacking": [n for n in ans.get("lacking") or [] if n in allowed][:6],
+               "lacking": lacking,
                "dead_end": bool(ans.get("dead_end")),
                "results": [{"id": r["id"], "doubts": [x for x in r.get("doubts") or [] if _gap_doubt(x)]}
-                           for r in ans.get("results") or [] if isinstance(r, dict) and r.get("id") in by_id]}
+                           for r in (ans.get("results") or [])[:TOP] if isinstance(r, dict) and r.get("id") in by_id]}
         path = _file()
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:

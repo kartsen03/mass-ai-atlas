@@ -6,6 +6,7 @@
 Every answer is checked for the Contract 2 invariants; most questions also have an expectation of
 their own. Prints each failure and the pass rate, and exits 1 if anything failed.
 """
+import json
 import os
 import re
 import sys
@@ -173,13 +174,15 @@ def main():
             failures.append(f"toggle: {r['from_id']} -> {r['to_id']} didn't show as a new connection")
 
     # gap board: chat isn't recorded, no question text is stored, statuses follow the links file
-    for q in ["hi", "tell me about SBXi", "AI investors in Springfield", "lab space for a biotech startup in Cambridge"]:
+    for q in ["hi", "tell me about SBXi", "AI investors in Springfield", "lab space for a biotech startup in Cambridge",
+              "startups on mars", "who is the CEO of Glasswing", "funding in Providence", "asdf qwerty"]:
         gaps.record(answer(q, "before"))
     stored = open(os.environ["GAPS_PATH"], encoding="utf-8").read()
     items = gaps.top(50)
     checks += 4
-    if stored.count("\n") != 3:
-        failures.append(f"gap board stored {stored.count(chr(10))} rows for 3 searches and 1 greeting")
+    if stored.count("\n") != 3 or any(len(json.loads(x)["results"]) > gaps.TOP for x in stored.splitlines()):
+        failures.append(f"gap board stored {stored.count(chr(10))} rows; expected 3 fixable questions out of 8, "
+                        f"each with at most {gaps.TOP} results")
     if any(w in stored.lower() for w in ("tell me", "biotech startup", "investors in")):
         failures.append("gap board stored question text")
     if not any(it["id"] == "sbxi" and it["doubt"] == "no connections" and it["status"] == "repaired" and it["repair"]
