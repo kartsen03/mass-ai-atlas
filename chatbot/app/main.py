@@ -228,9 +228,18 @@ def submit(text: str):
     st.session_state.to_record = bool(st.session_state.query)
 
 
+def pick_example(ex: str):
+    # Runs as a callback (before the rerun), so it may set the text box's value.
+    st.session_state.q_input = ex
+    submit(ex)
+
+
 def ask_view():
+    # The text box has a fixed key. Passing value= instead gives it a new identity whenever the last
+    # question changes, and Streamlit then drops what was just typed (every second question was lost).
+    st.session_state.setdefault("q_input", "")
     with st.form("ask", clear_on_submit=False, border=False):
-        q = st.text_input("What are you looking for?", value=st.session_state.query,
+        q = st.text_input("What are you looking for?", key="q_input",
                           placeholder="e.g. pre-seed AI fund for MIT alumni")
         if st.form_submit_button("Ask", type="primary"):
             submit(q)
@@ -238,9 +247,7 @@ def ask_view():
     if not st.session_state.query:  # examples only until the first question, to keep the panel short
         st.markdown('<span class="small">Try one:</span>', unsafe_allow_html=True)
         for i, ex in enumerate(EXAMPLES):
-            if st.button(ex, key=f"ex{i}", use_container_width=True):
-                submit(ex)
-                st.rerun()
+            st.button(ex, key=f"ex{i}", use_container_width=True, on_click=pick_example, args=(ex,))
 
     mode_label = st.radio(
         "Connections",
@@ -258,16 +265,24 @@ def ask_view():
         before = ask(query, "before") if mode == "after" else res
 
     # Gap board: once per submitted question, always the "before" answer (Contract 3).
-    if st.session_state.pop("to_record", False) and gaps_record:
-        try:
-            gaps_record(before)
-        except Exception:
-            pass
+    # Chat replies (greetings, thanks, help, off-topic) carry no needs, so they're never recorded.
+    is_chat = "chat" in (res.get("kind"), before.get("kind"))
+    if st.session_state.pop("to_record", False):
+        if gaps_record and not is_chat:
+            try:
+                gaps_record(before)
+            except Exception:
+                pass
         # Remember what this question hit, so the board can mark "from your question".
-        st.session_state.last_hit = {
+        st.session_state.last_hit = {"doubts": set(), "needs": set()} if is_chat else {
             "doubts": {(r.get("id"), d) for r in before.get("results", []) for d in r.get("doubts", [])},
-            "needs": set(before.get("needs") or []) if before.get("dead_end") else set(),
+            "needs": set(before.get("lacking") or []) if before.get("dead_end") else set(),
         }
+
+    if is_chat:  # a normal bot reply, not a dead end
+        with st.chat_message("assistant", avatar="🧭"):
+            st.markdown(md_text(res.get("not_found")))
+        return
 
     before_by_id = {r["id"]: r for r in before.get("results", [])} if mode == "after" else {}
 
@@ -287,6 +302,11 @@ def ask_view():
     for i, r in enumerate(results, 1):
         render_result(i, r, before_by_id.get(r.get("id")), trust)
 
+    lacking = [x for x in res.get("lacking") or [] if isinstance(x, str)]
+    if lacking:
+        shown = " · ".join(e("anything in " + x[7:] if x.startswith("place: ") else x) for x in lacking)
+        st.markdown(f'<span class="small"><b>Not in the Atlas:</b> {shown}</span>', unsafe_allow_html=True)
+
     if results:
         st.caption("Next step: open the Atlas entry, check the doubt signals with the organization, then reach out "
                    "through the contact route on their own site.")
@@ -296,29 +316,32 @@ MINE_TAG = ' <span class="badge b-info">← from your question</span>'
 
 STATUS = {  # status -> (badge class, label)
     "repaired": ("b-ok", "repaired by a reviewed link"),
-    "queued": ("b-info", "queued: link proposed, needs review"),
+    "queued": ("b-info", "proposed, needs review"),
     "open": ("b-warn", "open"),
 }
 
 
 def gaps_view():
     st.markdown("**What people couldn't find.** Each question asked here records the gaps it hit: dead ends, "
-                "and doubt signals on the results. Reviewed links from our survey are the repairs.")
-    st.caption("We store only the parsed needs and the Atlas ids, never the question text or anything about who asked.")
+                "and doubt signals on the results. Some gaps already have a repair: a reviewed link that our "
+                "survey found independently of this board.")
+    st.caption("We store only the parsed needs and the Atlas ids, never the question text or anything about who asked. "
+               "Counts include questions our team asked while testing today.")
     if not gaps_top:
         st.info("The gap board isn't connected yet (waiting for `chatbot/core/gaps.py`).")
         return
     try:
-        items = gaps_top(10) or []
+        everything = gaps_top(1000) or []
     except Exception:
-        items = []
-    if not items:
+        everything = []
+    if not everything:
         st.info("No gaps recorded yet today. Ask a question in the Ask tab and it will show up here.")
         return
-    counts = {s: sum(1 for it in items if it.get("status") == s) for s in STATUS}
+    items = everything[:10]  # the list shows the top 10; the totals count every gap today
+    counts = {s: sum(1 for it in everything if it.get("status") == s) for s in STATUS}
     c1, c2, c3 = st.columns(3)
     c1.metric("Open", counts["open"])
-    c2.metric("Queued", counts["queued"])
+    c2.metric("Needs review", counts["queued"])
     c3.metric("Repaired", counts["repaired"])
     hit = st.session_state.get("last_hit") or {"doubts": set(), "needs": set()}
     for it in items:
