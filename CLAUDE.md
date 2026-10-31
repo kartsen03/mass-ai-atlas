@@ -88,7 +88,10 @@ A JSON array, one object per proposed link:
  "understood":"optional: how we read the question, labelled as our reading, or null",
  "trust":{"id":"one of the top two result ids","reason":"optional: why to trust it less, from doubts/Atlas fields only"}}
 ```
-- `why` may use `loc` (for "located in …"). `understood` and `trust` are optional, so readers can ignore them. Full spec: `contracts/answer.schema.md`.
+- `why` may use `loc` (for "located in …"). `understood`, `trust`, `needs` and `dead_end` are optional, so readers can ignore them. Full spec: `contracts/answer.schema.md`.
+
+## Contract 3: gap board (`chatbot/core/gaps.py` → `chatbot/app`)
+`record(before_answer)` runs once per submitted question. `top(n)` returns today's gaps with `open | queued | repaired` status, computed from the links file. It stores parsed needs only, **never raw query text**. Counts are labelled "questions asked today", never "founders". Full spec: `contracts/gaps.schema.md`. Freeze for this feature only moves to **2:50**, and videos to **3:00**.
 
 **The six doubt signals** (Track B is scored on showing all of them):
 1. approximate pin (`approx: true`)

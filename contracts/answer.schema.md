@@ -46,6 +46,8 @@ answer(query: str, mode: str = "after") -> dict   # mode is "before" or "after"
 | `not_found` | string or `null` | What the query asked for that the Atlas doesn't cover, in plain words, plus an alternative when there is one (e.g. `"No wet-lab space is listed in the Atlas. The closest listed spaces are below."`). `null` when everything was covered. **Never null when `results` is empty** |
 | `understood` | string or `null` | *Optional.* How we read the question, in plain words (e.g. `"pre-seed funding · for MIT alumni · any MA location"`). This is **our reading, not a fact**, and the app labels it that way. It never names an org. Absent or `null` means don't show it |
 | `trust` | object or `null` | *Optional.* Which of the top two results to trust less, and why. See below. Absent or `null` means don't show it |
+| `needs` | array of strings | *Optional.* The parsed needs, as short labels from the Atlas's own vocabulary (categories, offers, tags, stages, MA places), e.g. `["funding", "lab space", "place: Springfield"]`. **Never words copied from the query.** At most 6. Feeds the gap board (`contracts/gaps.schema.md`) |
+| `dead_end` | bool | *Optional.* `true` when the Atlas can't cover the question: `results` is empty, or `not_found` says part of it is missing. Absent means `false` |
 
 ### `trust` (optional)
 
