@@ -251,6 +251,14 @@ OUT_OF_STATE = (r"providence|rhode island|new york|nyc|manhattan|brooklyn|san fr
 CONTACT = r"e-?mails?|phone(?: numbers?)?|cell(?: phone)?|contact (?:info|information|details)|linkedin|home address|whatsapp"
 PERSON = r"who (?:is|are|runs|leads|founded|started)|ceo|cto|founders? of|partners? at|people at|employees|staff"
 OPEN_NOW = r"open now|accepting applications|applications open|open to apply|apply now|deadline|rolling"
+# "funded by X", "came out of X", "who backed X": a question about how organizations are related.
+# The Atlas records which organizations are connected (untyped links), not who funded whom.
+RELATION = (r"(?:funded|backed|financed|invested in|incubated|accelerated|supported|spun (?:out|off)) (?:by|at|from|out of)|"
+            r"portfolio(?: companies)? of|(?:came|come|comes|coming|spun) out of|spin-?(?:outs?|offs?) (?:of|from)|"
+            r"who (?:funded|funds|backed|backs|invested in|invests in|financed)|investors (?:behind|of)|"
+            r"(?:connected|related) to|partners? of")
+# "Harvard University" names an institution, not the "university labs" category
+INSTITUTION = r"(?:harvard|tufts|northeastern|babson|brandeis|boston|clark|suffolk) university|university of massachusetts"
 
 STOP = set("""a an the and or but if then so to of in on at by for with from into about over under near around
 i im i'm we we're our my me us you your they them their it its this that these those there here
@@ -372,9 +380,13 @@ def parse(query):
         intent["out_of_state"] = m.group(0)
     intent["contact"] = grab(CONTACT)
     intent["person"] = grab(PERSON)
+    intent["relation"] = grab(RELATION)
     for alias, eid in _alias_cache():
         if eid not in intent["orgs"] and grab(re.escape(alias)):
             intent["orgs"].append(eid)
+    for tag in ("BU", "BC"):  # before places, so "Boston University" isn't read as the city
+        if grab(TAGS[tag]):
+            intent["tags"].append(tag)
     if grab(r"west of worcester|western mass(?:achusetts)?|western ma"):
         intent["region"] = "west"
     elif grab(r"outside (?:of )?(?:greater )?boston|beyond boston|outside the boston area"):
@@ -392,9 +404,10 @@ def parse(query):
     # Categories, stages and "seed" may share words with offers and tags ("investors" is both a
     # category and funding), so they are matched without claiming text, and their words are only
     # set aside afterwards so they don't come back as free-text terms.
-    shared = []
+    inst = _find(INSTITUTION, t)
+    shared = list(inst)
     for cat, pat in CATS.items():
-        spans = _find(pat, t)
+        spans = [s for s in _find(pat, t) if not any(a <= s[0] and s[1] <= b for a, b in inst)]
         if spans:
             intent["cats"].append(cat)
             shared += spans
@@ -847,6 +860,37 @@ def _chat(query, mode, kind):
             "kind": "chat", "needs": [], "dead_end": False, "lacking": []}
 
 
+def _related(query, mode, intent, link_rows, approved_from):
+    """"Startups funded by General Catalyst": the organization named, then every entry the Atlas
+    connects to it, in either direction. The Atlas's links don't say how two organizations are
+    related, so the answer says so. Only atlas.json's own links pick the list, so both toggle modes
+    show the same organizations; approved links appear as new connections under each one."""
+    anchor = atlas()["by_id"][intent["orgs"][0]]
+    linked = [d for d in atlas()["data"] if d["id"] != anchor["id"] and (
+        d["id"] in (anchor.get("links") or []) or anchor["id"] in (d.get("links") or []))]
+    chosen = [d for d in linked if d["cat"] in intent["cats"]] if intent["cats"] else linked
+    notes = ["The Atlas records which organizations are connected, but not who funded or backed whom."]
+    if not linked:
+        notes.append(f"The Atlas itself lists no connections for {anchor['name']}" +
+                     (", but reviewed links below add some." if mode == "after" and anchor["id"] in approved_from else "."))
+    elif not chosen:
+        notes.append(f"None of the organizations connected to {anchor['name']} are "
+                     f"{_join(CAT_NOUN[c] for c in intent['cats'])}, so all of them are below.")
+        chosen = linked
+    else:
+        notes.append(f"Below: {anchor['name']}, then the organizations the Atlas connects it to.")
+    chosen.sort(key=lambda d: (-int((d.get("lastVerified") or "0").replace("-", "")), d["name"].lower()))
+    rows = [_result(anchor, " ".join(filter(None, (_first_sentence(anchor.get("desc")), _first_sentence(anchor.get("why"))))),
+                    mode, link_rows, approved_from)]
+    for d in chosen[:MAX_RESULTS - 1]:
+        why = f"Connected to {anchor['name']} in the Atlas. " + (_first_sentence(d.get("why")) or _first_sentence(d.get("desc")))
+        rows.append(_result(d, why.strip(), mode, link_rows, approved_from))
+    reading = "organizations connected to one you named" + \
+        (" · " + _join(CAT_NOUN[c] for c in intent["cats"]) if intent["cats"] else "")
+    return {"query": query, "mode": mode, "results": rows, "not_found": " ".join(notes), "understood": reading,
+            "trust": None, "kind": "lookup", "needs": needs(intent), "dead_end": False, "lacking": []}
+
+
 def answer(query, mode="after"):
     """Contract 2. Never raises: on any error it returns no results and a plain note."""
     mode = mode if mode in ("before", "after") else "after"
@@ -882,6 +926,8 @@ def _answer(query, mode):
                              "Try a Massachusetts city, or leave the place out.",
                 "understood": understood(intent, False), "trust": None, "kind": "search", "needs": needs(intent),
                 "dead_end": True, "lacking": []}
+    if intent["relation"] and intent["orgs"]:
+        return _related(query, mode, intent, link_rows, approved_from)
     # Words the vocabulary didn't cover go to the model (when a key is set), which maps them onto the
     # same vocabulary. Once it has, the leftover words stop counting as search terms. Without the
     # model, leftover words only count when nothing else in the question matched.
@@ -902,6 +948,8 @@ def _answer(query, mode):
                 by_meaning = True
                 for k in ("offers", "tags", "stages", "cats"):
                     intent[k] = list(dict.fromkeys(intent[k] + m[k]))
+                if intent["relation"]:  # "funded by Harvard" asks who is linked to Harvard, not for funding
+                    intent["offers"] = [o for o in intent["offers"] if o not in ("funding", "grants")]
                 if m["place"] in GAP_PLACES and not intent["place"]:
                     intent["gap"] = m["place"]
                 elif m["place"] and not intent["gap"]:
@@ -909,6 +957,9 @@ def _answer(query, mode):
     if intent["contact"] or intent["person"]:
         notes.append("The Atlas lists organizations, not people, so it holds no names or contact details. "
                      "Each organization's page links to its own website.")
+    if intent["relation"]:
+        notes.append("The Atlas doesn't record who funded or backed whom" +
+                     (f", so these are linked to {_join(intent['tags'])} by tag or description." if intent["tags"] else "."))
     if by_meaning or _slots(intent) or intent["orgs"]:
         intent["terms"] = []
     uncovered_note = None
@@ -917,7 +968,11 @@ def _answer(query, mode):
         uncovered_note = (f"Nothing in the Atlas mentions {', '.join(said[:-1]) + ' or ' + said[-1] if len(said) > 1 else said[0]}, "
                           "so these match the rest of your question.")
 
-    if intent["orgs"] and not (intent["offers"] or intent["tags"] or intent["stages"] or intent["cats"]):
+    # "what does Glasswing invest in" asks about the organization, not for other investors
+    about = bool(intent["orgs"]) and (not (intent["offers"] or intent["tags"] or intent["stages"] or intent["cats"])
+                                      or (re.match(r"\s*what (?:does|do|did|is|are)\b", text.lower()) is not None
+                                          and not (intent["tags"] or intent["stages"] or intent["cats"])))
+    if about:
         for eid in intent["orgs"][:MAX_RESULTS]:
             d = by_id[eid]
             rows.append(_result(d, " ".join(filter(None, (_first_sentence(d.get("desc")), _first_sentence(d.get("why"))))),
@@ -949,7 +1004,7 @@ def _answer(query, mode):
     not_found = " ".join(dict.fromkeys(notes)) or None
     if not rows and not not_found:
         not_found = "Nothing in the Atlas matches that."
-    lookup = bool(intent["orgs"]) and not (intent["offers"] or intent["tags"] or intent["stages"] or intent["cats"])
+    lookup = about
     gap = not rows or bool(intent["lacking"] or uncovered_note or intent["contact"] or intent["person"])
     return {"query": query, "mode": mode, "results": rows, "not_found": not_found,
             "understood": understood(intent, lookup), "trust": None if lookup else trust(rows),

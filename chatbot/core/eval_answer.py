@@ -131,6 +131,14 @@ CASES = [(q, lambda a: a["kind"] == "chat" and not a["results"] and not a["dead_
     ("coworking in Somerville", lambda a: a["results"], "space by city"),
     ("angel investors for a seed round", lambda a: a["results"] and cats(a) & {"angel", "vc"}, "angels"),
     ("Does MassChallenge offer GPU compute?", lambda a: ids(a)[:1] == ["masschallenge"], "named org comes first"),
+    ("startups funded by General Catalyst", lambda a: ids(a)[:1] == ["gc"] and "not who funded" in a["not_found"]
+     and all(i in BY_ID["gc"].get("links", []) or "gc" in (BY_ID[i].get("links") or []) for i in ids(a)[1:]),
+     "a relation question lists the Atlas's connections and says links aren't typed"),
+    ("startups funded by Harvard university", lambda a: "funding" not in a["needs"] and "university labs" not in a["needs"]
+     and "doesn't record who funded" in a["not_found"], "'funded by' isn't a funding need; Harvard University isn't a category"),
+    ("startups from Boston University", lambda a: "BU" in a["needs"] and "place: Boston" not in a["needs"],
+     "Boston University is an institution, not the city"),
+    ("what does Glasswing invest in", lambda a: ids(a) == ["glasswing"], "a question about one org answers about it"),
 ]
 
 
