@@ -48,6 +48,8 @@ answer(query: str, mode: str = "after") -> dict   # mode is "before" or "after"
 | `trust` | object or `null` | *Optional.* Which of the top two results to trust less, and why. See below. Absent or `null` means don't show it |
 | `needs` | array of strings | *Optional.* The parsed needs, as short labels from the Atlas's own vocabulary (categories, offers, tags, stages, MA places), e.g. `["funding", "lab space", "place: Springfield"]`. **Never words copied from the query.** At most 6. Feeds the gap board (`contracts/gaps.schema.md`) |
 | `dead_end` | bool | *Optional.* `true` when the Atlas can't cover the question: `results` is empty, or `not_found` says part of it is missing. Absent means `false` |
+| `kind` | string | *Optional.* `"search"`, `"lookup"` (a named org) or `"chat"`. `"chat"` covers greetings, thanks, help, empty and off-topic messages: `results` is `[]`, and the **reply text is in `not_found`**. The app shows it as a normal bot message, not a dead end, and never records it on the gap board. Absent (only on the error fallback) means `"search"` |
+| `lacking` | array of strings | *Optional.* The `needs` labels the Atlas couldn't cover, e.g. `["place: Springfield", "lab space"]`. Always a subset of `needs`. The app shows it as a small "Not in the Atlas:" line under the results. When `dead_end` is `true`, each label becomes a dead-end gap on the board. Absent means `[]` |
 
 ### `trust` (optional)
 
