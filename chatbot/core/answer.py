@@ -566,9 +566,29 @@ def _join(words):
     return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
 
 
+# Organizations, not people: an Atlas sentence that names a person ("Publishes Jane Doe's newsletter")
+# is skipped for the next one. A possessive two-word name counts as a person unless one of its words
+# is in an Atlas organization's name or is a place.
+_NOT_PEOPLE = {"north", "south", "east", "west", "new", "america", "england", "boston", "massachusetts",
+               "commonwealth", "kendall", "cambridge", "pentagon"}
+
+
+def _org_words():
+    key = ("orgwords", id(atlas()))
+    if key not in _cache:
+        _cache[key] = {w for d in atlas()["data"] for w in re.findall(r"[a-z]+", d["name"].lower())} | _NOT_PEOPLE
+    return _cache[key]
+
+
+def _names_person(sentence):
+    words = _org_words()
+    return any(a.lower() not in words and b.lower() not in words
+               for a, b in re.findall(r"\b([A-Z][a-z]+) ([A-Z][a-z]+)['’]s\b", sentence))
+
+
 def _first_sentence(text, limit=180):
-    text = (text or "").strip()
-    s = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
+    sentences = [s for s in re.split(r"(?<=[.!?])\s", (text or "").strip()) if s]
+    s = next((s for s in sentences if not _names_person(s)), "")
     return s if len(s) <= limit else s[:limit].rsplit(" ", 1)[0] + "…"
 
 
@@ -678,7 +698,7 @@ def _why(s, intent):
     if s["xm"]:
         parts.append("mentions " + _join(f'"{w}"' for w in s["xm"]))
     lead = (parts[0][0].upper() + "; ".join(parts)[1:] + ".") if parts else ""
-    return (lead + " " + _first_sentence(d.get("why") or d.get("desc"))).strip()
+    return (lead + " " + (_first_sentence(d.get("why")) or _first_sentence(d.get("desc")))).strip()
 
 
 CAT_NOUN = {"vc": "venture firms", "angel": "angel groups", "accel": "accelerators", "university": "university labs",
@@ -900,7 +920,7 @@ def _answer(query, mode):
     if intent["orgs"] and not (intent["offers"] or intent["tags"] or intent["stages"] or intent["cats"]):
         for eid in intent["orgs"][:MAX_RESULTS]:
             d = by_id[eid]
-            rows.append(_result(d, _first_sentence(d.get("desc")) + (" " + _first_sentence(d.get("why")) if d.get("why") else ""),
+            rows.append(_result(d, " ".join(filter(None, (_first_sentence(d.get("desc")), _first_sentence(d.get("why"))))),
                                 mode, link_rows, approved_from))
     elif _slots(intent) or intent["terms"]:
         scored, rank_notes = rank(intent)
@@ -909,7 +929,7 @@ def _answer(query, mode):
         named = [eid for eid in intent["orgs"] if eid not in {s["d"]["id"] for s in scored}]
         for eid in named:
             d = by_id[eid]
-            rows.append(_result(d, _first_sentence(d.get("desc")) + (" " + _first_sentence(d.get("why")) if d.get("why") else ""),
+            rows.append(_result(d, " ".join(filter(None, (_first_sentence(d.get("desc")), _first_sentence(d.get("why"))))),
                                 mode, link_rows, approved_from))
         scored.sort(key=lambda s: s["d"]["id"] not in intent["orgs"])
         for s in scored[:max(MAX_RESULTS - len(rows), 0)]:
