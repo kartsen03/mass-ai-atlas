@@ -208,7 +208,8 @@ CATS = {
     "accel": r"accelerators?|incubators?|startup programs?",
     "university": r"universit(?:y|ies)|research (?:labs?|cent(?:er|re)s?|institutes?)|university labs?",
     "corporate": r"corporate labs?|corporations?|big tech",
-    "startup": r"(?<!for )startups|ai companies",
+    # "an AI startup" or "startups" asks for startups; "my startup" or "a startup founder" does not
+    "startup": r"(?:an? (?:ai )?startup(?! founders?| teams?| compan(?:y|ies)| ideas?))|(?<!for )(?<!my )(?<!our )startups|ai companies",
     "community": r"communit(?:y|ies)|meetups?",
     "event": r"events?|conferences?|summits?|hackathons?|pitch (?:nights?|competitions?)",
     "gov": r"government|state (?:programs?|agenc\w+|funding)|public (?:funding|agenc\w+)|agenc(?:y|ies)",
@@ -259,7 +260,9 @@ founders team org orgs organization organizations organisation organisations lis
 options option places place people work working build building make making support resources thing things
 massachusetts mass boston area atlas ai near local based tech technology now today currently
 somewhere anywhere someplace everyone would like want wants write small big front product products tool tools
-idea ideas bounce solo does doing done thinking first time year years month practise practice""".split())
+idea ideas bounce solo does doing done thinking first time year years month practise practice
+suggest suggestion suggestions recommendation recommendations linked link links related associated connected
+affiliated tied""".split())
 
 _WORD = r"(?<![a-z0-9]){}(?![a-z0-9])"
 
@@ -435,6 +438,28 @@ def _slots(intent):
                 or intent["gap"] or intent["region"] or intent["open_only"])
 
 
+# A tag also matches its narrower forms (an "MIT spinout" is linked to MIT). Institution tags fall
+# back to the entry's own description, so a startup described as "an MIT CSAIL spinout" still counts.
+TAG_ALSO = {"MIT": ("MIT spinout",)}
+INSTITUTIONS = {"MIT": r"mit", "Harvard": r"harvard", "Tufts": r"tufts", "Northeastern": r"northeastern",
+                "BU": r"boston university", "BC": r"boston college", "Babson": r"babson"}
+
+
+def _tag_match(d, tag):
+    """("tag", the entry's tag) for a tag match, ("mention", tag) for a description mention, else None."""
+    tags = d.get("tags") or []
+    if tag in tags:
+        return ("tag", tag)
+    also = next((t for t in TAG_ALSO.get(tag, ()) if t in tags), None)
+    if also:
+        return ("tag", also)
+    if tag in INSTITUTIONS:
+        text = " ".join([d.get("desc", ""), d.get("why", ""), d.get("loc", "")]).lower()
+        if re.search(_WORD.format(INSTITUTIONS[tag]), text):
+            return ("mention", tag)
+    return None
+
+
 def _apply_open(d):
     ab = d.get("applyBy")
     return ab == "rolling" or (bool(ab) and ab >= date.today().isoformat())
@@ -504,16 +529,19 @@ def rank(intent):
         om = [o for o in intent["offers"] if o in (d.get("offers") or [])]
         if intent["offers"] and offers_band and len(om) < offers_band:
             continue
-        tm = [x for x in intent["tags"] if x in (d.get("tags") or [])]
+        hits = {x: _tag_match(d, x) for x in intent["tags"]}
+        tm = list(dict.fromkeys(h[1] for h in hits.values() if h and h[0] == "tag"))
+        im = [x for x, h in hits.items() if h and h[0] == "mention"]
         sm = [s for s in intent["stages"] if s in (d.get("stages") or [])]
         xm = [w for w in intent["terms"] if _mentions(d, w)]
-        score = 4 * len(om) + 3 * len(tm) + 2 * len(sm) + len(xm)
+        score = 4 * len(om) + 3 * len(tm) + 2 * len(im) + 2 * len(sm) + len(xm)
         soft = intent["offers"] or intent["tags"] or intent["stages"] or intent["terms"]
         if soft and score == 0:
             continue
         score += 1 if any(d["cat"] in NEED_CATS[o] for o in om) else 0
         km = _haversine(GAP_PLACES[intent["gap"]], (d["lat"], d["lng"])) if intent["gap"] else 0
-        scored.append({"d": d, "score": score, "om": om, "tm": tm, "sm": sm, "xm": xm, "km": km})
+        scored.append({"d": d, "score": score, "om": om, "tm": tm, "im": im, "sm": sm, "xm": xm, "km": km,
+                       "treq": {x for x, h in hits.items() if h}})
     where = intent["place"] or ("west of Worcester" if intent["region"] == "west" else None) or \
         ("outside Boston" if intent["region"] == "outside" else None)
     if not scored and where:
@@ -522,7 +550,13 @@ def rank(intent):
         if scored:
             return scored, [f"Nothing {('in ' + where.title()) if intent['place'] else where} matches that, "
                             f"so these are from across the state."] + wider_notes
-    want_tags = [x for x in intent["tags"] if not any(x in (s["d"].get("tags") or []) for s in scored)]
+    if not scored and intent["cats"]:
+        broader = dict(intent, cats=[])
+        scored, broader_notes = rank(broader)
+        if scored:
+            return scored, [f"No {_join(CAT_NOUN[c] for c in intent['cats'])} in the Atlas match that, "
+                            f"so these are other kinds of organization."] + broader_notes
+    want_tags = [x for x in intent["tags"] if not any(x in s["treq"] for s in scored)]
     if want_tags and scored:
         notes.append(f"Nothing here is tagged {_join(want_tags)}, so these match the rest of your question.")
     scored.sort(key=lambda s: (-s["score"], s["km"], -len(s["om"] + s["tm"] + s["sm"]),
@@ -538,6 +572,8 @@ def _why(s, intent):
         parts.append("offers " + _join(OFFER_LABEL[o] for o in s["om"]))
     if s["tm"]:
         parts.append("tagged " + _join(s["tm"]))
+    if s.get("im"):
+        parts.append("its description mentions " + _join(s["im"]))
     if s["sm"]:
         parts.append("serves the " + _join(STAGE_NAME[n] for n in s["sm"]) + " stage")
     if intent["place"] or intent["gap"] or intent["region"]:
@@ -668,10 +704,11 @@ def _answer(query, mode):
                 intent["place"] = intent["place"] or m["place"]
     if by_meaning or _slots(intent):
         intent["terms"] = []
+    uncovered_note = None
     if uncovered and (by_meaning or _slots(intent)):
         said = [f'"{w}"' for w in uncovered]
-        notes.append(f"Nothing in the Atlas mentions {', '.join(said[:-1]) + ' or ' + said[-1] if len(said) > 1 else said[0]}, "
-                     "so these match the rest of your question.")
+        uncovered_note = (f"Nothing in the Atlas mentions {', '.join(said[:-1]) + ' or ' + said[-1] if len(said) > 1 else said[0]}, "
+                          "so these match the rest of your question.")
 
     if intent["orgs"] and not (intent["offers"] or intent["tags"] or intent["stages"] or intent["cats"]):
         for eid in intent["orgs"][:MAX_RESULTS]:
@@ -683,6 +720,8 @@ def _answer(query, mode):
         notes += rank_notes
         for s in scored[:MAX_RESULTS]:
             rows.append(_result(s["d"], _why(s, intent), mode, link_rows, approved_from))
+        if rows and uncovered_note:
+            notes.insert(0, uncovered_note)
         if not rows:
             said = [f'"{w}"' for w in intent["terms"]]
             notes.append((f"Nothing in the Atlas mentions {', '.join(said[:-1]) + ' or ' + said[-1] if len(said) > 1 else said[0]}. "
