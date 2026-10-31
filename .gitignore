@@ -6,6 +6,7 @@
 
 # local claude config
 .claude/
+CLAUDE.md
 atlas.json
 site-pages/
 /e/
