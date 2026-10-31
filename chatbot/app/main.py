@@ -16,6 +16,11 @@ import streamlit.components.v1 as components  # noqa: E402
 
 from chatbot.core.answer import answer  # noqa: E402  (also loads .env)
 
+try:  # gap board (Contract 3). The panel works without it.
+    from chatbot.core.gaps import record as gaps_record, top as gaps_top  # noqa: E402
+except Exception:
+    gaps_record = gaps_top = None
+
 st.set_page_config(page_title="Ask the Atlas", page_icon="🧭", layout="centered")
 
 EXAMPLES = [
@@ -216,33 +221,50 @@ else:
 if "query" not in st.session_state:
     st.session_state.query = ""
 
-with st.form("ask", clear_on_submit=False, border=False):
-    q = st.text_input("What are you looking for?", value=st.session_state.query,
-                      placeholder="e.g. pre-seed AI fund for MIT alumni")
-    if st.form_submit_button("Ask", type="primary"):
-        st.session_state.query = q.strip()
 
-if not st.session_state.query:  # examples only until the first question, to keep the panel short
-    st.markdown('<span class="small">Try one:</span>', unsafe_allow_html=True)
-    for i, ex in enumerate(EXAMPLES):
-        if st.button(ex, key=f"ex{i}", use_container_width=True):
-            st.session_state.query = ex
-            st.rerun()
+def submit(text: str):
+    """A question was submitted (Ask, Enter or an example). Only here do we record it on the gap board."""
+    st.session_state.query = text.strip()
+    st.session_state.to_record = bool(st.session_state.query)
 
-mode_label = st.radio(
-    "Connections",
-    ["Before: Atlas only", "After: + reviewed links"],
-    index=1, horizontal=True,
-    help="'After' adds links a person on our team reviewed and approved, each with its source sentence.",
-)
-mode = "after" if mode_label.startswith("After") else "before"
 
-query = st.session_state.query
-if query:
+def ask_view():
+    with st.form("ask", clear_on_submit=False, border=False):
+        q = st.text_input("What are you looking for?", value=st.session_state.query,
+                          placeholder="e.g. pre-seed AI fund for MIT alumni")
+        if st.form_submit_button("Ask", type="primary"):
+            submit(q)
+
+    if not st.session_state.query:  # examples only until the first question, to keep the panel short
+        st.markdown('<span class="small">Try one:</span>', unsafe_allow_html=True)
+        for i, ex in enumerate(EXAMPLES):
+            if st.button(ex, key=f"ex{i}", use_container_width=True):
+                submit(ex)
+                st.rerun()
+
+    mode_label = st.radio(
+        "Connections",
+        ["Before: Atlas only", "After: + reviewed links"],
+        index=1, horizontal=True,
+        help="'After' adds links a person on our team reviewed and approved, each with its source sentence.",
+    )
+    mode = "after" if mode_label.startswith("After") else "before"
+
+    query = st.session_state.query
+    if not query:
+        return
     with st.spinner("Searching the Atlas…"):
         res = ask(query, mode)
-        before = ask(query, "before") if mode == "after" else None
-    before_by_id = {r["id"]: r for r in (before or {}).get("results", [])}
+        before = ask(query, "before") if mode == "after" else res
+
+    # Gap board: once per submitted question, always the "before" answer (Contract 3).
+    if st.session_state.pop("to_record", False) and gaps_record:
+        try:
+            gaps_record(before)
+        except Exception:
+            pass
+
+    before_by_id = {r["id"]: r for r in before.get("results", [])} if mode == "after" else {}
 
     if res.get("understood"):
         st.markdown(f'**We read this as:** {e(res["understood"])} '
@@ -263,6 +285,56 @@ if query:
     if results:
         st.caption("Next step: open the Atlas entry, check the doubt signals with the organization, then reach out "
                    "through the contact route on their own site.")
+
+
+STATUS = {  # status -> (badge class, label)
+    "repaired": ("b-ok", "repaired by a reviewed link"),
+    "queued": ("b-info", "queued: link proposed, needs review"),
+    "open": ("b-warn", "open"),
+}
+
+
+def gaps_view():
+    st.markdown("**What people couldn't find.** Each question asked here records the gaps it hit: dead ends, "
+                "and doubt signals on the results. Reviewed links from our survey are the repairs.")
+    st.caption("We store only the parsed needs and the Atlas ids, never the question text or anything about who asked.")
+    if not gaps_top:
+        st.info("The gap board isn't connected yet (waiting for `chatbot/core/gaps.py`).")
+        return
+    try:
+        items = gaps_top(10) or []
+    except Exception:
+        items = []
+    if not items:
+        st.info("No gaps recorded yet today. Ask a question in the Ask tab and it will show up here.")
+        return
+    counts = {s: sum(1 for it in items if it.get("status") == s) for s in STATUS}
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Open", counts["open"])
+    c2.metric("Queued", counts["queued"])
+    c3.metric("Repaired", counts["repaired"])
+    for it in items:
+        cls, status_label = STATUS.get(it.get("status"), STATUS["open"])
+        n = int(it.get("count") or 0)
+        kind = "dead end" if it.get("kind") == "dead_end" else "doubt"
+        head = (f'<div class="conn{" new" if it.get("status") == "repaired" else ""}">'
+                f'<b>{e(it.get("label"))}</b> <span class="small">· {kind}</span><br>'
+                f'<span class="badge {cls}">{e(status_label)}</span> '
+                f'<span class="small">{n} question{"s" if n != 1 else ""} asked today</span>')
+        rep = it.get("repair") if it.get("status") in ("repaired", "queued") else None
+        if isinstance(rep, dict) and rep.get("to_id") in NAMES:
+            head += (f'<br><span class="small">→ {e(NAMES[rep["to_id"]])} '
+                     f'({e((rep.get("relation") or "").replace("_", " "))}) · {link(rep.get("source_url"), "source")}</span>')
+            if rep.get("quote"):
+                head += f'<br><q>{e(rep["quote"])}</q>'
+        st.markdown(head + "</div>", unsafe_allow_html=True)
+
+
+tab_ask, tab_gaps = st.tabs(["Ask", "What people couldn't find"])
+with tab_ask:
+    ask_view()
+with tab_gaps:
+    gaps_view()
 
 sample = "sample" in LINKS_FILE.name
 st.divider()
