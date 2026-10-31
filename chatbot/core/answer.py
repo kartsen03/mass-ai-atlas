@@ -6,11 +6,13 @@ doubt is built from atlas.json fields, so the same query ranks the same way in b
 nothing outside atlas.json can appear. A model, when one is configured, only maps an unusual
 question onto that same vocabulary; it never names an organization.
 """
+import difflib
 import json
 import math
 import os
 import re
 import sys
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
@@ -262,7 +264,7 @@ massachusetts mass boston area atlas ai near local based tech technology now tod
 somewhere anywhere someplace everyone would like want wants write small big front product products tool tools
 idea ideas bounce solo does doing done thinking first time year years month practise practice
 suggest suggestion suggestions recommendation recommendations linked link links related associated connected
-affiliated tied""".split())
+affiliated tied thanks thank thx hello hey hi cheers sorry okay ok""".split())
 
 _WORD = r"(?<![a-z0-9]){}(?![a-z0-9])"
 
@@ -366,7 +368,7 @@ def parse(query):
     taken += shared
     leftover = re.sub(r"[^a-z0-9 -]", " ", "".join(" " if any(a <= i < b for a, b in taken) else ch
                                                      for i, ch in enumerate(t)))
-    intent["terms"] = [w for w in dict.fromkeys(leftover.split()) if len(w) >= 4 and w not in STOP][:5]
+    intent["terms"] = [w for w in dict.fromkeys(leftover.split()) if 4 <= len(w) <= 30 and w not in STOP][:5]
     return intent
 
 
@@ -388,24 +390,31 @@ def _model_slots(query):
     except ImportError:
         return None
     places = sorted(PLACES) + sorted(GAP_PLACES)
+    ids = sorted(atlas()["by_id"])
     schema = {
         "type": "object",
         "properties": {
+            "kind": {"type": "string", "enum": ["search", "lookup", "people", "chat", "off_topic"]},
+            "orgs": {"type": "array", "items": {"type": "string", "enum": ids}},
             "offers": {"type": "array", "items": {"type": "string", "enum": list(OFFERS)}},
             "tags": {"type": "array", "items": {"type": "string", "enum": list(TAGS) + ["seed"]}},
             "stages": {"type": "array", "items": {"type": "integer", "enum": list(STAGE_NAME)}},
             "cats": {"type": "array", "items": {"type": "string", "enum": list(CATS)}},
             "place": {"type": "string", "enum": places + [""]},
         },
-        "required": ["offers", "tags", "stages", "cats", "place"],
+        "required": ["kind", "orgs", "offers", "tags", "stages", "cats", "place"],
         "additionalProperties": False,
     }
-    system = ("You map a founder's question onto the vocabulary of the Mass AI Atlas, a directory of "
-              "Massachusetts AI organizations. Use only the allowed values. offers = what the founder "
-              "needs from an organization; tags = sectors or traits; stages: 1 Spark (exploring), "
-              "2 Validate, 3 Build, 4 Fund (pre-seed and seed), 5 Scale; cats = the kinds of "
-              "organization they ask for, only if they name one; place = a Massachusetts place they "
-              "name, else empty. Leave a field empty rather than guess. Never name organizations.")
+    system = ("You read a message sent to the search box of the Mass AI Atlas, a directory of "
+              "Massachusetts AI organizations, and map it onto the Atlas vocabulary. Use only the allowed "
+              "values. kind: search (looking for organizations that fit a need), lookup (asking about "
+              "specific organizations by name), people (asking for a person or contact details), chat "
+              "(small talk), off_topic (anything else). orgs = ids of organizations the message names, "
+              "even misspelled, never ones it doesn't name; offers = what the founder needs from an "
+              "organization; tags = sectors or traits; stages: 1 Spark (exploring), 2 Validate, 3 Build, "
+              "4 Fund (pre-seed and seed), 5 Scale; cats = the kinds of organization they ask for, only if "
+              "they name one; place = a Massachusetts place they name, else empty. Leave a field empty "
+              "rather than guess.")
     request = dict(model=os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5-5", max_tokens=1024, system=system,
                    messages=[{"role": "user", "content": query}],
                    output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}})
@@ -423,6 +432,8 @@ def _model_slots(query):
     except Exception:
         return None
     slots = {
+        "kind": raw.get("kind") if raw.get("kind") in ("search", "lookup", "people", "chat", "off_topic") else "search",
+        "orgs": [o for o in dict.fromkeys(raw.get("orgs", [])) if o in atlas()["by_id"]][:MAX_RESULTS],
         "offers": [o for o in raw.get("offers", []) if o in OFFERS],
         "tags": [t for t in raw.get("tags", []) if t in TAGS or t == "seed"],
         "stages": [s for s in raw.get("stages", []) if s in STAGE_NAME],
@@ -475,6 +486,33 @@ def _mentions(d, term):
     return re.search(r"(?<![a-z0-9])" + re.escape(term), text) is not None
 
 
+def _stem(w):
+    return w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w
+
+
+def _bm25(terms):
+    """BM25 over each entry's name, description, reason, tags and place. It only orders free-text
+    matches, so a rare word in the question counts for more than a common one."""
+    key = ("bm25", id(atlas()))
+    if key not in _cache:
+        docs = {}
+        for d in atlas()["data"]:
+            text = " ".join([d["name"], d.get("desc", ""), d.get("why", ""), " ".join(d.get("tags") or []), d.get("loc", "")])
+            docs[d["id"]] = Counter(_stem(w) for w in re.findall(r"[a-z0-9]+", text.lower()))
+        df = Counter(w for tf in docs.values() for w in tf)
+        avg = sum(sum(tf.values()) for tf in docs.values()) / max(len(docs), 1)
+        _cache[key] = (docs, df, avg)
+    docs, df, avg = _cache[key]
+    n, k1, b = len(docs), 1.2, 0.75
+    words = [_stem(w) for w in terms]
+    out = {}
+    for eid, tf in docs.items():
+        size = sum(tf.values())
+        out[eid] = sum(math.log(1 + (n - df[w] + 0.5) / (df[w] + 0.5)) * tf[w] * (k1 + 1)
+                       / (tf[w] + k1 * (1 - b + b * size / avg)) for w in words if tf[w])
+    return out
+
+
 def _join(words):
     words = list(words)
     return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
@@ -508,15 +546,21 @@ def rank(intent):
         dropped.append(hard.pop(0)[0] if hard[0][0] != "cats" or len(hard) == 1 else hard.pop(0)[0])
         filtered = [d for d in cands if all(f(d) for _, f in hard)]
     cands = filtered
+    # every need the Atlas couldn't meet is also kept as a vocabulary label, for the gap board
+    lacking = intent.setdefault("lacking", [])
     if "place" in dropped:
         notes.append(f"No entries in {intent['place'].title()} match all of that, so these are from across the state.")
+        lacking.append("place: " + intent["place"].title())
     if "cats" in dropped:
         notes.append("No entry of that kind matches, so these include other kinds of organization.")
+        lacking += [CAT_NOUN[c] for c in intent["cats"]]
     if "open" in dropped:
         notes.append("None of these list an open application right now.")
+        lacking.append("open to apply now")
     if intent["gap"]:
         notes.append(f"No entries in {intent['gap'].title()} are listed in the Atlas. The closest are below, "
                      f"nearest first (distances from the city centre, approximate).")
+        lacking.append("place: " + intent["gap"].title())
 
     scored = []
     offers_band = 0
@@ -525,6 +569,7 @@ def rank(intent):
         missing = [o for o in intent["offers"] if not any(o in (d.get("offers") or []) for d in cands)]
         if missing:
             notes.append(f"No entry here offers {_join(OFFER_LABEL[o] for o in missing)}.")
+            lacking += [OFFER_LABEL[o] for o in missing]
     for d in cands:
         om = [o for o in intent["offers"] if o in (d.get("offers") or [])]
         if intent["offers"] and offers_band and len(om) < offers_band:
@@ -533,7 +578,7 @@ def rank(intent):
         tm = list(dict.fromkeys(h[1] for h in hits.values() if h and h[0] == "tag"))
         im = [x for x, h in hits.items() if h and h[0] == "mention"]
         sm = [s for s in intent["stages"] if s in (d.get("stages") or [])]
-        xm = [w for w in intent["terms"] if _mentions(d, w)]
+        xm = [w for w in intent["terms"] if _mentions(d, w)] if intent["terms"] else []
         score = 4 * len(om) + 3 * len(tm) + 2 * len(im) + 2 * len(sm) + len(xm)
         soft = intent["offers"] or intent["tags"] or intent["stages"] or intent["terms"]
         if soft and score == 0:
@@ -548,18 +593,22 @@ def rank(intent):
         wider = dict(intent, place=None, region=None)
         scored, wider_notes = rank(wider)
         if scored:
+            lacking.append("place: " + (where.title() if intent["place"] else where))
             return scored, [f"Nothing {('in ' + where.title()) if intent['place'] else where} matches that, "
                             f"so these are from across the state."] + wider_notes
     if not scored and intent["cats"]:
         broader = dict(intent, cats=[])
         scored, broader_notes = rank(broader)
         if scored:
+            lacking += [CAT_NOUN[c] for c in intent["cats"]]
             return scored, [f"No {_join(CAT_NOUN[c] for c in intent['cats'])} in the Atlas match that, "
                             f"so these are other kinds of organization."] + broader_notes
     want_tags = [x for x in intent["tags"] if not any(x in s["treq"] for s in scored)]
     if want_tags and scored:
         notes.append(f"Nothing here is tagged {_join(want_tags)}, so these match the rest of your question.")
-    scored.sort(key=lambda s: (-s["score"], s["km"], -len(s["om"] + s["tm"] + s["sm"]),
+        lacking += want_tags
+    bm = _bm25(intent["terms"]) if intent["terms"] else {}
+    scored.sort(key=lambda s: (-s["score"], s["km"], -bm.get(s["d"]["id"], 0), -len(s["om"] + s["tm"] + s["sm"]),
                                -int((s["d"].get("lastVerified") or "0").replace("-", "")),
                                bool(s["d"].get("approx")), s["d"]["name"].lower()))
     return scored, notes
@@ -663,46 +712,130 @@ def _result(d, why, mode, link_rows, approved_from):
             "connections": connections(d, mode, link_rows), "doubts": doubts(d, mode, approved_from)}
 
 
+def _where(intent):
+    if intent["place"] or intent["gap"]:
+        return (intent["place"] or intent["gap"]).title()
+    return {"west": "west of Worcester", "outside": "outside Boston"}.get(intent["region"])
+
+
+def needs(intent):
+    """The parsed needs as Atlas vocabulary labels (Contract 2 `needs`), never words from the question."""
+    out = [OFFER_LABEL[o] for o in intent["offers"]] + list(intent["tags"]) + \
+        [STAGE_NAME[s] + " stage" for s in intent["stages"]] + [CAT_NOUN[c] for c in intent["cats"]]
+    if _where(intent):
+        out.append("place: " + _where(intent))
+    if intent["open_only"]:
+        out.append("open to apply now")
+    return list(dict.fromkeys(out))[:6]
+
+
+# ---------- messages that aren't searches ----------
+
+MAX_QUERY = 500
+EXAMPLES = ('"pre-seed funding for a climate startup"', '"lab space in Cambridge"', '"mentors for a first-time founder"')
+_HI = r"hi+|hello+|hey+|hiya|howdy|yo|greetings|good (?:morning|afternoon|evening|day)|hola|what'?s up|sup"
+_CHAT = (
+    ("greeting", rf"(?:{_HI})(?: (?:there|all|everyone|team|atlas|bot|friend))?"
+                 r"(?: how are (?:you|u)(?: doing)?(?: today)?| how'?s it going)?"),
+    ("thanks", r"(?:many )?(?:thanks?|thank (?:you|u)|thx|ty|cheers|appreciate it)(?: (?:so much|a lot|very much|again))?|"
+               r"(?:great|awesome|perfect|cool|nice|ok|okay|got it|sounds good|that helps|helpful)(?: thanks?(?: you)?)?"),
+    ("bye", r"bye|goodbye|good bye|see (?:you|ya)|later|that'?s all|i'?m done|done"),
+    ("help", r"help|help me|what can you do|what do you do|how does this work|how do i use (?:this|you|it)|what is this|"
+             r"who are you|what are you|what can i ask(?: you)?|what do you know|how can you help(?: me)?|start|menu"),
+)
+
+
+def chat_kind(text):
+    """greeting | thanks | bye | help | empty when the whole message is one of those, else None."""
+    t = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9' ]", " ", text.lower().replace("’", "'"))).strip()
+    if not t:
+        return "help" if "?" in text else "empty"
+    return next((kind for kind, pat in _CHAT if re.fullmatch(pat, t)), None)
+
+
+def _chat(query, mode, kind):
+    n = len(atlas()["data"])
+    try_ = "Try " + ", ".join(EXAMPLES[:-1]) + " or " + EXAMPLES[-1] + "."
+    text = {
+        "greeting": f"Hi! I search the Mass AI Atlas, {n} Massachusetts AI organizations, and show what's uncertain "
+                    f"about each one. Ask about a need, a sector, a stage or a place. {try_}",
+        "thanks": f"You're welcome. Ask another question any time. {try_}",
+        "bye": "Good luck with the search. The full Atlas is at the-open-accelerator.com/ecosystem.",
+        "help": f"I find organizations in the Mass AI Atlas ({n} Massachusetts AI organizations) that fit what you need: "
+                "funding, equity-free money, space, compute, mentors, community, talent or customers, by sector, stage "
+                "or city. Each result says why it fits, links to its Atlas page and shows its doubts, such as an "
+                f"approximate pin or no listed check size. I answer only from the Atlas, which lists organizations, "
+                f"not people. {try_}",
+        "empty": f"Ask about a need, a sector, a stage or a place. {try_}",
+        "off_topic": f"I can only answer questions about Massachusetts AI organizations in the Atlas. {try_}",
+    }[kind]
+    return {"query": query, "mode": mode, "results": [], "not_found": text, "understood": None, "trust": None,
+            "kind": "chat", "needs": [], "dead_end": False, "lacking": []}
+
+
 def answer(query, mode="after"):
     """Contract 2. Never raises: on any error it returns no results and a plain note."""
     mode = mode if mode in ("before", "after") else "after"
     try:
-        return _answer(query or "", mode)
+        return _answer(query if isinstance(query, str) else str(query or ""), mode)
     except Exception:
-        return {"query": query, "mode": mode, "results": [], "not_found": FAILED}
+        return {"query": query, "mode": mode, "results": [], "not_found": FAILED, "understood": None, "trust": None,
+                "needs": [], "dead_end": False, "lacking": []}
 
 
 def _answer(query, mode):
     by_id = atlas()["by_id"]
     link_rows = [r for r in links() if r["status"] != "rejected"]
     approved_from = {r["from_id"] for r in link_rows if r["status"] == "approved"}
-    intent = parse(query)
     notes, rows = [], []
+    text = query.strip()
+    if len(text) > MAX_QUERY:
+        text = text[:MAX_QUERY].rsplit(" ", 1)[0]
+        notes.append(f"That's a long message, so I read only its first {MAX_QUERY} characters.")
+    kind = chat_kind(text)
+    if kind:
+        return _chat(query, mode, kind)
+    # a greeting in front of a question ("hi, any GPU credits?") is dropped before reading it
+    m = re.match(rf"(?:{_HI})(?: (?:there|all|everyone|team))?(?![a-z0-9'])[\s,!.:;-]*", text.lower())
+    if m and text[m.end():].strip():
+        text = text[m.end():]
+    intent = parse(text)
+    intent["lacking"] = []
 
     if intent["out_of_state"]:
         return {"query": query, "mode": mode, "results": [],
                 "not_found": f"The Atlas covers Massachusetts only, so it has nothing in {intent['out_of_state'].title()}. "
                              "Try a Massachusetts city, or leave the place out.",
-                "understood": understood(intent, False), "trust": None}
-    if intent["contact"] or intent["person"]:
-        notes.append("The Atlas lists organizations, not people, so it holds no names or contact details. "
-                     "Each organization's page links to its own website.")
+                "understood": understood(intent, False), "trust": None, "kind": "search", "needs": needs(intent),
+                "dead_end": True, "lacking": []}
     # Words the vocabulary didn't cover go to the model (when a key is set), which maps them onto the
     # same vocabulary. Once it has, the leftover words stop counting as search terms. Without the
     # model, leftover words only count when nothing else in the question matched.
     by_meaning = False
     uncovered = [w for w in intent["terms"] if not any(_mentions(d, w) for d in atlas()["data"])]
     if not (intent["contact"] or intent["person"]) and not intent["orgs"] and (intent["terms"] or not _slots(intent)):
-        m = _model_slots(query)
-        if m and any(m.values()):
-            by_meaning = True
-            for k in ("offers", "tags", "stages", "cats"):
-                intent[k] = list(dict.fromkeys(intent[k] + m[k]))
-            if m["place"] in GAP_PLACES and not intent["place"]:
-                intent["gap"] = m["place"]
-            elif m["place"] and not intent["gap"]:
-                intent["place"] = intent["place"] or m["place"]
-    if by_meaning or _slots(intent):
+        m = _model_slots(text)
+        if m:
+            named = intent["offers"] or intent["tags"] or intent["stages"] or intent["cats"]
+            if m["kind"] in ("chat", "off_topic") and not named:
+                return _chat(query, mode, "greeting" if m["kind"] == "chat" else "off_topic")
+            if m["kind"] == "people":
+                intent["person"] = True
+            slots = any(m[k] for k in ("offers", "tags", "stages", "cats", "place"))
+            if m["orgs"] and not slots and not _slots(intent):
+                intent["orgs"] = m["orgs"]  # an organization the keywords missed, e.g. misspelled
+            elif slots:
+                by_meaning = True
+                for k in ("offers", "tags", "stages", "cats"):
+                    intent[k] = list(dict.fromkeys(intent[k] + m[k]))
+                if m["place"] in GAP_PLACES and not intent["place"]:
+                    intent["gap"] = m["place"]
+                elif m["place"] and not intent["gap"]:
+                    intent["place"] = intent["place"] or m["place"]
+    if intent["contact"] or intent["person"]:
+        notes.append("The Atlas lists organizations, not people, so it holds no names or contact details. "
+                     "Each organization's page links to its own website.")
+    if by_meaning or _slots(intent) or intent["orgs"]:
         intent["terms"] = []
     uncovered_note = None
     if uncovered and (by_meaning or _slots(intent)):
@@ -736,8 +869,11 @@ def _answer(query, mode):
     if not rows and not not_found:
         not_found = "Nothing in the Atlas matches that."
     lookup = bool(intent["orgs"]) and not (intent["offers"] or intent["tags"] or intent["stages"] or intent["cats"])
+    gap = not rows or bool(intent["lacking"] or uncovered_note or intent["contact"] or intent["person"])
     return {"query": query, "mode": mode, "results": rows, "not_found": not_found,
-            "understood": understood(intent, lookup), "trust": None if lookup else trust(rows)}
+            "understood": understood(intent, lookup), "trust": None if lookup else trust(rows),
+            "kind": "lookup" if lookup and rows else "search", "needs": needs(intent), "dead_end": gap,
+            "lacking": list(dict.fromkeys(n for n in intent["lacking"] if n in needs(intent)))}
 
 
 if __name__ == "__main__":
