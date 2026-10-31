@@ -142,8 +142,8 @@ OFFERS = {
     "grants": r"grants?|non-?dilutive|equity[- ]free|prizes?|free money|sbir|stipends?",
     "space": r"office(?: space)?|desks?|lab space|wet[- ]?labs?|workspace|co-?working|makerspace|bench space|place to work|space",
     "compute": r"compute|gpus?|gpu clusters?|hpc|cloud credits|computing power|compute time|inference credits",
-    "mentorship": r"mentors?|mentorship|mentoring|advice|advis[eo]rs?|coach(?:ing|es)?|guidance|feedback|office hours",
-    "community": r"communit(?:y|ies)|meetups?|network(?:ing)?|peers|people to meet|meet (?:other )?founders|events?",
+    "mentorship": r"mentors?|mentorship|mentoring|advice|advis[eo]rs?|coach(?:ing|es)?|guidance|feedback|office hours|sounding boards?|bounce (?:my )?ideas? off|someone to talk to",
+    "community": r"communit(?:y|ies)|meetups?|network(?:ing)?|peers|people to meet|meet (?:other )?founders|events?|solo founders?|fellow founders|other founders|people like me",
     "talent": r"talent|hir(?:e|ing)|recruit(?:ing|ment)?|engineers?|interns?|internships?|co-?founders?|teammates?|developers?",
     "customers": r"customers?|pilots?|buyers?|design partners?|first users|sales|distribution|clients?",
 }
@@ -264,7 +264,7 @@ massachusetts mass boston area atlas ai near local based tech technology now tod
 somewhere anywhere someplace everyone would like want wants write small big front product products tool tools
 idea ideas bounce solo does doing done thinking first time year years month practise practice
 suggest suggestion suggestions recommendation recommendations linked link links related associated connected
-affiliated tied thanks thank thx hello hey hi cheers sorry okay ok""".split())
+affiliated tied thanks thank thx hello hey hi cheers sorry okay ok coming upcoming soon next""".split())
 
 _WORD = r"(?<![a-z0-9]){}(?![a-z0-9])"
 
@@ -306,10 +306,57 @@ def _alias_cache():
     return _cache[key]
 
 
+# ---------- spelling: a misspelled word is read as the closest word the Atlas or its vocabulary uses ----------
+
+def _patterns():
+    return [*OFFERS.values(), *TAGS.values(), *CATS.values(), *STAGES.values(), CONTACT, PERSON, OPEN_NOW,
+            OUT_OF_STATE, r"seed"]
+
+
+def _known(word):
+    return word in STOP or any(re.fullmatch(p, word) for p in _patterns())
+
+
+def _lexicon():
+    """Every word in the Atlas's entries, every place name and every single-word vocabulary term.
+    Rebuilt when atlas.json changes."""
+    key = ("lexicon", id(atlas()))
+    if key not in _cache:
+        words = set()
+        for d in atlas()["data"]:
+            text = " ".join([d["name"], d.get("desc", ""), d.get("why", ""), d.get("loc", ""), " ".join(d.get("tags") or [])])
+            words.update(re.findall(r"[a-z][a-z0-9]{2,}", text.lower()))
+        for name in list(PLACES) + list(GAP_PLACES):
+            words.update(name.split())
+        words.update(w for p in _patterns() for w in re.findall(r"[a-z]{3,}", p) if _known(w))
+        _cache[key] = (sorted(words), words)
+    return _cache[key]
+
+
+def _correct(t):
+    """Fix words of 5+ letters that match nothing (no vocabulary term, no word in any entry) to the
+    single closest known word. Returns the corrected text and the (wrong, right) pairs."""
+    lex, known = _lexicon()
+    fixes = []
+
+    def fix(m):
+        w = m.group(0)
+        if len(w) < 5 or len(w) > 30 or w in known or _known(w):
+            return w
+        close = difflib.get_close_matches(w, lex, n=1, cutoff=0.84)
+        if not close:
+            return w
+        fixes.append((w, close[0]))
+        return close[0]
+
+    return re.sub(r"[a-z][a-z0-9]*", fix, t), fixes
+
+
 def parse(query):
     """Read a question into slots from the Atlas vocabulary. Everything here is a reading of
     the question, not a fact about any organization."""
     t = re.sub(r"\s+", " ", (query or "").lower().replace("’", "'")).strip()
+    t, fixes = _correct(t)
     taken = []
 
     def grab(pattern):
@@ -318,7 +365,8 @@ def parse(query):
         return bool(spans)
 
     intent = {"offers": [], "tags": [], "stages": [], "cats": [], "place": None, "gap": None, "region": None,
-              "out_of_state": None, "open_only": False, "contact": False, "person": False, "orgs": [], "terms": []}
+              "out_of_state": None, "open_only": False, "contact": False, "person": False, "orgs": [], "terms": [],
+              "fixes": fixes}
     m = re.search(_WORD.format(f"(?:{OUT_OF_STATE})"), t)
     if m:
         intent["out_of_state"] = m.group(0)
@@ -664,6 +712,11 @@ def understood(intent, lookup):
         parts.append("open to apply now")
     if intent["terms"]:
         parts.append("mentions " + _join(f'"{w}"' for w in intent["terms"]))
+    # spelling fixes to vocabulary words are shown; fixes to organization names show as the result itself
+    fixes = [f'"{a}" as "{b}"' for a, b in intent.get("fixes") or [] if _known(b) or b in " ".join(PLACES)
+             or b in " ".join(GAP_PLACES)]
+    if parts and fixes:
+        parts.append("read " + _join(fixes))
     return " · ".join(parts) or None
 
 
@@ -741,7 +794,8 @@ _CHAT = (
                r"(?:great|awesome|perfect|cool|nice|ok|okay|got it|sounds good|that helps|helpful)(?: thanks?(?: you)?)?"),
     ("bye", r"bye|goodbye|good bye|see (?:you|ya)|later|that'?s all|i'?m done|done"),
     ("help", r"help|help me|what can you do|what do you do|how does this work|how do i use (?:this|you|it)|what is this|"
-             r"who are you|what are you|what can i ask(?: you)?|what do you know|how can you help(?: me)?|start|menu"),
+             r"who are you|what are you|what can i ask(?: you)?|what do you know|how can you help(?: me)?|start|menu|"
+             r"what (?:is|'s) (?:the atlas|ask the atlas|the mass ai atlas|this site|this tool)"),
 )
 
 
@@ -851,7 +905,14 @@ def _answer(query, mode):
     elif _slots(intent) or intent["terms"]:
         scored, rank_notes = rank(intent)
         notes += rank_notes
-        for s in scored[:MAX_RESULTS]:
+        # organizations the question names come first, whether or not they match the rest of it
+        named = [eid for eid in intent["orgs"] if eid not in {s["d"]["id"] for s in scored}]
+        for eid in named:
+            d = by_id[eid]
+            rows.append(_result(d, _first_sentence(d.get("desc")) + (" " + _first_sentence(d.get("why")) if d.get("why") else ""),
+                                mode, link_rows, approved_from))
+        scored.sort(key=lambda s: s["d"]["id"] not in intent["orgs"])
+        for s in scored[:max(MAX_RESULTS - len(rows), 0)]:
             rows.append(_result(s["d"], _why(s, intent), mode, link_rows, approved_from))
         if rows and uncovered_note:
             notes.insert(0, uncovered_note)
