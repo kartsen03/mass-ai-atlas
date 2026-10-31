@@ -201,7 +201,7 @@ TAGS = {
     "MIT spinout": r"spin-?outs?|spun out",
     "policy": r"policy|regulat\w*",
     "MIT": r"mit", "Harvard": r"harvard", "Tufts": r"tufts", "Northeastern": r"northeastern",
-    "BU": r"boston university", "BC": r"boston college", "Babson": r"babson",
+    "BU": r"boston university|bu", "BC": r"boston college", "Babson": r"babson",
 }
 
 CATS = {
@@ -511,14 +511,15 @@ def _slots(intent):
 
 
 # A tag also matches its narrower forms (an "MIT spinout" is linked to MIT). Institution tags fall
-# back to the entry's own description, so a startup described as "an MIT CSAIL spinout" still counts.
+# back to the entry's own name and description, so a startup described as "an MIT CSAIL spinout",
+# or an entry named "BU Computing & Data Sciences", still counts.
 TAG_ALSO = {"MIT": ("MIT spinout",)}
 INSTITUTIONS = {"MIT": r"mit", "Harvard": r"harvard", "Tufts": r"tufts", "Northeastern": r"northeastern",
-                "BU": r"boston university", "BC": r"boston college", "Babson": r"babson"}
+                "BU": r"boston university|bu", "BC": r"boston college", "Babson": r"babson"}
 
 
 def _tag_match(d, tag):
-    """("tag", the entry's tag) for a tag match, ("mention", tag) for a description mention, else None."""
+    """("tag", the entry's tag) for a tag match, ("mention", tag) for a name or description mention, else None."""
     tags = d.get("tags") or []
     if tag in tags:
         return ("tag", tag)
@@ -526,8 +527,8 @@ def _tag_match(d, tag):
     if also:
         return ("tag", also)
     if tag in INSTITUTIONS:
-        text = " ".join([d.get("desc", ""), d.get("why", ""), d.get("loc", "")]).lower()
-        if re.search(_WORD.format(INSTITUTIONS[tag]), text):
+        text = " ".join([d["name"], d.get("desc", ""), d.get("why", ""), d.get("loc", "")]).lower()
+        if re.search(_WORD.format(f"(?:{INSTITUTIONS[tag]})"), text):
             return ("mention", tag)
     return None
 
@@ -703,7 +704,7 @@ def _why(s, intent):
     if s["tm"]:
         parts.append("tagged " + _join(s["tm"]))
     if s.get("im"):
-        parts.append("its description mentions " + _join(s["im"]))
+        parts.append("its Atlas entry mentions " + _join(s["im"]))
     if s["sm"]:
         parts.append("serves the " + _join(STAGE_NAME[n] for n in s["sm"]) + " stage")
     if intent["place"] or intent["gap"] or intent["region"]:

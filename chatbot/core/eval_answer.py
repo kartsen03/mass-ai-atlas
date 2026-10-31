@@ -139,6 +139,8 @@ CASES = [(q, lambda a: a["kind"] == "chat" and not a["results"] and not a["dead_
     ("startups from Boston University", lambda a: "BU" in a["needs"] and "place: Boston" not in a["needs"],
      "Boston University is an institution, not the city"),
     ("what does Glasswing invest in", lambda a: ids(a) == ["glasswing"], "a question about one org answers about it"),
+    ("Boston University", lambda a: "bucds" in ids(a) and "buai" in ids(a), "BU and Boston University are one name"),
+    ("BU", lambda a: "bucds" in ids(a), "the abbreviation finds BU Computing & Data Sciences"),
 ]
 
 
