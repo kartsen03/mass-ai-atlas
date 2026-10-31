@@ -54,8 +54,9 @@ organization columns (never home addresses or phone numbers), and matches every 
 `angel` entry by full name. Output: `out/heartbeat.json`, with one clickable
 `adviserinfo.sec.gov` link per firm.
 
-**New probe, investors last verified 2026-06 with an active SEC filing from Massachusetts: `12` of `22`.**
-Across all Atlas investors: `25` of `55` active in MA, `2` file only from outside MA, `28` not found.
+**New probe, investors last verified 2026-06 with a 2026 SEC adviser filing from Massachusetts: `12` of `22`.**
+Across all Atlas investors: `25` of `55` with a recent filing from MA, `2` file only from outside MA, `28` not found.
+("Active" in the data is the SEC registration status, not a claim that a firm is investing.)
 
 | Heartbeat | Means |
 |---|---|
@@ -65,7 +66,8 @@ Across all Atlas investors: `25` of `55` active in MA, `2` file only from outsid
 | `not_found` | No match. Angel groups and corporate funds don't file this form. **Not evidence the org is gone** |
 
 This is evidence for a person to use when re-verifying. It never writes `lastVerified` itself.
-Next step: the chatbot shows it under "last verified 2026-06", e.g. "SEC filing 2026-03 · active".
+Next step: the chatbot shows it under the "last verified 2026-06" doubt, e.g. "SEC adviser filing 2026-03 (MA)".
+It sits under the doubt as evidence; it does not clear it.
 
 ## Limits and next steps
 

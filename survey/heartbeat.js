@@ -127,8 +127,8 @@ async function main() {
   const stale = rows.filter(r => r.lastVerified === "2026-06");
   for (const r of stale) console.log(`  ${r.id.padEnd(14)} ${r.heartbeat.padEnd(17)} ${(r.record_name || "").padEnd(40)} ${r.city ? r.city + ", " + r.state : ""}  ${r.latest_filing || ""}`);
   console.log(`\nread ${advisers.length} SEC adviser records -> survey/out/heartbeat.json`);
-  console.log(`Heartbeat · stale investors (last verified 2026-06) with an active SEC filing from MA: ${count(stale, "active_in_MA")} of ${stale.length}`);
-  console.log(`           all Atlas investors: ${count(rows, "active_in_MA")} of ${rows.length} active in MA · ${count(rows, "filed_outside_MA")} file from outside MA · ${count(rows, "not_found")} not found`);
+  console.log(`Heartbeat · stale investors (last verified 2026-06) with a recent SEC adviser filing from MA: ${count(stale, "active_in_MA")} of ${stale.length}`);
+  console.log(`           all Atlas investors: ${count(rows, "active_in_MA")} of ${rows.length} filing from MA · ${count(rows, "filed_outside_MA")} file from outside MA · ${count(rows, "not_found")} not found`);
 }
 
 main().catch(e => { console.error(e.message); process.exit(1); });
