@@ -53,10 +53,9 @@ automatically because they were about people.
 
 ## Novelty: what's new
 
-- **The chatbot is the sensor, our pipeline is the repair.** Our team's chatbot records what
-  founders' questions could not find, as a ranked list a maintainer could work from. Our
-  approved links show up there as repaired: ask again, and "no connections" is gone, with the
-  source sentence on screen.
+- **Questions point to the gaps.** Our team's chatbot records what founders' questions could not
+  find, as a ranked list a maintainer could work from. Our pipeline proposes sourced links, a
+  person decides, and once a link is approved, asking again shows it with the source sentence.
 - **New evidence for "last verified".** VC firms update an SEC adviser filing every year, even
   between funds. That is a dated public record from a third party, where the map only had the
   date of the last human check.
