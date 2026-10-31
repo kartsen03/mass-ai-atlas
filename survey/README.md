@@ -45,10 +45,32 @@ No AI anywhere in the pipeline: the same pages give the same proposals every tim
 | medium | 1 / 3 |
 | low | 0 / 6 |
 
+## Heartbeat-lite (a new probe)
+
+"Last verified 2026-06" only says when a person last looked. VC firms leave a dated record of
+their own every year: an investment-adviser filing (Form ADV) with the SEC, made even between funds.
+`node survey/heartbeat.js` downloads the SEC's monthly adviser data once, reads only
+organization columns (never home addresses or phone numbers), and matches every Atlas `vc` and
+`angel` entry by full name. Output: `out/heartbeat.json`, with one clickable
+`adviserinfo.sec.gov` link per firm.
+
+**New probe, investors last verified 2026-06 with an active SEC filing from Massachusetts: `12` of `22`.**
+Across all Atlas investors: `25` of `55` active in MA, `2` file only from outside MA, `28` not found.
+
+| Heartbeat | Means |
+|---|---|
+| `active_in_MA` | Active SEC adviser, main office in MA, filed in the last 15 months |
+| `filed_outside_MA` | Files from another state (Bessemer: Larchmont, NY). This source can't see a Boston office, so it's **not** counted as evidence |
+| `old_or_inactive` | Found, but the filing is old or the status isn't active |
+| `not_found` | No match. Angel groups and corporate funds don't file this form. **Not evidence the org is gone** |
+
+This is evidence for a person to use when re-verifying. It never writes `lastVerified` itself.
+Next step: the chatbot shows it under "last verified 2026-06", e.g. "SEC filing 2026-03 · active".
+
 ## Limits and next steps
 
 Homepages only for now. A few sites block automated requests, and a few render with JavaScript
 and give no text. Next: read About, Portfolio and Partners pages, and the pages of
 already-connected orgs that name isolated ones.
 
-*Data: Mass AI Atlas, The Open Accelerator — the-open-accelerator.com/ecosystem (CC BY 4.0). Sources: the organizations' own public websites, listed in `out/sources.json`.*
+*Data: Mass AI Atlas, The Open Accelerator — the-open-accelerator.com/ecosystem (CC BY 4.0). Sources: the organizations' own public websites, listed in `out/sources.json`, and the SEC's investment adviser data (www.sec.gov, linked via adviserinfo.sec.gov).*
