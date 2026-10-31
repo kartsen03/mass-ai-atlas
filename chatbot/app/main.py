@@ -263,6 +263,11 @@ def ask_view():
             gaps_record(before)
         except Exception:
             pass
+        # Remember what this question hit, so the board can mark "from your question".
+        st.session_state.last_hit = {
+            "doubts": {(r.get("id"), d) for r in before.get("results", []) for d in r.get("doubts", [])},
+            "needs": set(before.get("needs") or []) if before.get("dead_end") else set(),
+        }
 
     before_by_id = {r["id"]: r for r in before.get("results", [])} if mode == "after" else {}
 
@@ -286,6 +291,8 @@ def ask_view():
         st.caption("Next step: open the Atlas entry, check the doubt signals with the organization, then reach out "
                    "through the contact route on their own site.")
 
+
+MINE_TAG = ' <span class="badge b-info">← from your question</span>'
 
 STATUS = {  # status -> (badge class, label)
     "repaired": ("b-ok", "repaired by a reviewed link"),
@@ -313,12 +320,16 @@ def gaps_view():
     c1.metric("Open", counts["open"])
     c2.metric("Queued", counts["queued"])
     c3.metric("Repaired", counts["repaired"])
+    hit = st.session_state.get("last_hit") or {"doubts": set(), "needs": set()}
     for it in items:
+        mine = ((it.get("id"), it.get("doubt")) in hit["doubts"]) if it.get("kind") == "doubt" \
+            else (it.get("need") in hit["needs"])
         cls, status_label = STATUS.get(it.get("status"), STATUS["open"])
         n = int(it.get("count") or 0)
         kind = "dead end" if it.get("kind") == "dead_end" else "doubt"
         head = (f'<div class="conn{" new" if it.get("status") == "repaired" else ""}">'
-                f'<b>{e(it.get("label"))}</b> <span class="small">· {kind}</span><br>'
+                f'<b>{e(it.get("label"))}</b> <span class="small">· {kind}</span>'
+                f'{MINE_TAG if mine else ""}<br>'
                 f'<span class="badge {cls}">{e(status_label)}</span> '
                 f'<span class="small">{n} question{"s" if n != 1 else ""} asked today</span>')
         rep = it.get("repair") if it.get("status") in ("repaired", "queued") else None
